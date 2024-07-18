@@ -11,48 +11,60 @@ namespace LocalWebChat
 {
 	internal class Client : INetworkHandler
 	{
-		TcpClient client = new TcpClient();
-		HttpClient httpClient = new HttpClient();
+		Mutex mutex = new Mutex();
+		NetworkStream client;
 		CancellationTokenSource cts = new CancellationTokenSource();
 		public event Action<string> IRecievedAMessage = (X) => { };
-		HttpRequestMessage request;
 		public Client(string way, Action<string> Post)
 		{
-			IRecievedAMessage += Post;
-			request = new HttpRequestMessage(HttpMethod.Post, "http://" + way);
-			client.Connect(way, 5555);
+			IRecievedAMessage += (X) => { mutex.WaitOne(); Post.Invoke(X); mutex.ReleaseMutex(); };
+			client = new TcpClient(way, 5555).GetStream();
 			Task.Run(() => Checker(cts.Token), cts.Token);
 		}
 		public void Send(string info)
 		{
-			info = Environment.MachineName + ": " + info + '\n';
-			request.Content = new ByteArrayContent(Encoding.Unicode.GetBytes(info));
-			httpClient.Send(request);
+			info = Environment.MachineName + ": " + info;
+			SendBytes(Encoding.Unicode.GetBytes(info));
+		}
+		void SendBytes(byte[] bytes)
+		{
+			client.Write(bytes);
 		}
 		void Checker(CancellationToken ct)
 		{
 			LinkedList<byte> raw = new LinkedList<byte>();
-			using(var str = client.GetStream())
+			string helper;
+			while (!ct.IsCancellationRequested)
 			{
-				int helper;
-				while (!ct.IsCancellationRequested)
+				mutex.WaitOne();
+				if (!client.DataAvailable) continue;
+				while (client.DataAvailable)
 				{
-					helper = str.ReadByte();
-					if (helper == -1) continue;
-					if (helper == '\n')
-					{
-						IRecievedAMessage.Invoke(Encoding.Unicode.GetString(raw.ToArray()));
-						raw.Clear();
-					}
-					raw.AddLast((byte)helper);
+					raw.AddLast((byte)client.ReadByte());
 				}
+				helper = Encoding.Unicode.GetString(raw.ToArray());
+				if(helper == "Disconnect")
+				{
+					SubStop();
+					break;
+				}
+				IRecievedAMessage.Invoke(helper);
+				raw.Clear();
+				mutex.ReleaseMutex();
 			}
 		}
 		public void Stop()
 		{
+			SendBytes(Encoding.Unicode.GetBytes("Disconnect"));
+			SubStop();
+		}
+		void SubStop()
+		{
+			IRecievedAMessage.Invoke("Disconnected");
 			cts.Cancel();
 			cts.Dispose();
 			client.Close();
+			mutex.Dispose();
 		}
 	}
 }
