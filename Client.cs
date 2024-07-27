@@ -11,13 +11,12 @@ namespace LocalWebChat
 {
 	internal class Client : INetworkHandler
 	{
-		Mutex mutex = new Mutex();
 		NetworkStream client;
 		CancellationTokenSource cts = new CancellationTokenSource();
 		public event Action<string> IRecievedAMessage = (X) => { };
 		public Client(string way, Action<string> Post)
 		{
-			IRecievedAMessage += (X) => { mutex.WaitOne(); Post.Invoke(X); mutex.ReleaseMutex(); };
+			IRecievedAMessage += Post;
 			client = new TcpClient(way, 5555).GetStream();
 			Task.Run(() => Checker(cts.Token), cts.Token);
 		}
@@ -36,7 +35,6 @@ namespace LocalWebChat
 			string helper;
 			while (!ct.IsCancellationRequested)
 			{
-				mutex.WaitOne();
 				if (!client.DataAvailable) continue;
 				while (client.DataAvailable)
 				{
@@ -50,7 +48,6 @@ namespace LocalWebChat
 				}
 				IRecievedAMessage.Invoke(helper);
 				raw.Clear();
-				mutex.ReleaseMutex();
 			}
 		}
 		public void Stop()
@@ -64,7 +61,6 @@ namespace LocalWebChat
 			cts.Cancel();
 			cts.Dispose();
 			client.Close();
-			mutex.Dispose();
 		}
 	}
 }

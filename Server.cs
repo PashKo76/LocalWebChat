@@ -14,73 +14,73 @@ namespace LocalWebChat
 		CancellationTokenSource tokenSource = new CancellationTokenSource();
 		List<NetworkStream> clients = new List<NetworkStream>();
 		public event Action<string> IRecievedAMessage = (X) => { };
-		Mutex mutex = new Mutex();
-		public Server(string way, Action<string> Post)
+		public Server(Action<string> Post)
 		{
-			IRecievedAMessage += (X) => { mutex.WaitOne(); Post.Invoke(X); mutex.ReleaseMutex(); };
+			IRecievedAMessage += Post;
 			listner.Start();
-			Task.Run(() => Pending(tokenSource.Token), tokenSource.Token);
-			Task.Run(() => Checker(tokenSource.Token), tokenSource.Token);
+			Task.Run(() => Cycle(tokenSource.Token), tokenSource.Token);
+		}
+		void Cycle(CancellationToken ct)
+		{
+			Pending(ct);
+			Checker(ct);
 		}
 		public void Send(string info)
 		{
-			SendBytes(Encoding.Unicode.GetBytes("Server:" + info));
+			SendBytes(Encoding.Unicode.GetBytes("Server: " + info));
 		}
 		void SendBytes(byte[] info)
 		{
-			mutex.WaitOne();
+			if (clients.Count == 0) return;
 			Parallel.ForEach(clients, (X) =>
 			{
 				X.Write(info);
 			});
-			mutex.ReleaseMutex();
 		}
 		void Checker(CancellationToken ct)
 		{
+			if (clients.Count == 0) return;
 			LinkedList<byte> bytes = new LinkedList<byte>();
 			string helper;
-			while (!ct.IsCancellationRequested)
+			foreach (var s in clients)
 			{
-				mutex.WaitOne();
-				foreach(var s in clients)
+				if (!s.DataAvailable) continue;
+				while (s.DataAvailable)
 				{
-					if (!s.DataAvailable) continue;
-					while (s.DataAvailable)
-					{
-						bytes.AddLast((byte)s.ReadByte());
-					}
-					helper = Encoding.Unicode.GetString(bytes.ToArray());
-					if(helper == "Disconnect")
-					{
-						clients.Remove(s);
-					}
+					bytes.AddLast((byte)s.ReadByte());
+				}
+				helper = Encoding.Unicode.GetString(bytes.ToArray());
+				if (helper == "Disconnect")
+				{
+					clients.Remove(s);
+					IRecievedAMessage.Invoke("User Disconnected");
+				}
+				else
+				{
 					IRecievedAMessage.Invoke(helper);
 					SendBytes(bytes.ToArray());
-					bytes.Clear();
 				}
-				mutex.ReleaseMutex();
+				bytes.Clear();
 			}
 		}
 		void Pending(CancellationToken ct)
 		{
-			while (!ct.IsCancellationRequested)
+			while (listner.Pending())
 			{
-				mutex.WaitOne();
 				clients.Add(listner.AcceptTcpClient().GetStream());
-				mutex.ReleaseMutex();
+				IRecievedAMessage.Invoke("User Connected");
 			}
 		}
 		public void Stop()
 		{
 			tokenSource.Cancel();
 			SendBytes(Encoding.Unicode.GetBytes("Disconnect"));
-			foreach(var s in clients)
+			foreach (var s in clients)
 			{
 				s.Close();
 			}
 			listner.Stop();
 			tokenSource.Dispose();
-			mutex.Dispose();
 		}
 	}
 }
